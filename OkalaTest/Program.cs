@@ -1,44 +1,83 @@
-var builder = WebApplication.CreateBuilder(args);
+using System.Net.Http.Headers;
+using System.Text.Json;
+using Core.CryptoServices;
+using Core.ExchangeServices;
+using FastEndpoints;
+using FastEndpoints.Swagger;
+using OkalaTest;
+using OkalaTest.CoinMarketCapCryptoServices;
+using OkalaTest.Crypto;
+using OkalaTest.ExchangeRatesServices;
 
-// Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseKestrel();
+builder.WebHost.ConfigureKestrel((_, options) =>
+{
+    options.ListenAnyIP(7050, _ => { });
+    // options.ListenAnyIP(5112, listenOptions =>
+    // {
+    //     listenOptions.Protocols = HttpProtocols.Http1AndHttp2AndHttp3;
+    //     listenOptions.UseHttps();
+    // });
+});
+builder.Services.AddHealthChecks();
+builder.Services.AddCors();
+builder.Services.AddFastEndpoints();
+
+builder.Services.SwaggerDocument(settings =>
+{
+    settings.DocumentSettings = generatorSettings =>
+    {
+        generatorSettings.Title = "Crypto - WebApi";
+        generatorSettings.DocumentName = "v1";
+        generatorSettings.Version = "v1";
+    };
+    settings.EnableJWTBearerAuth = false;
+    settings.MaxEndpointVersion = 1;
+});
+
+builder.Services.AddHttpClient("CoinMarketCap", c =>
+{
+    c.BaseAddress = new Uri("https://pro-api.coinmarketcap.com/v1/");
+    c.DefaultRequestHeaders
+        .Accept
+        .Add(new MediaTypeWithQualityHeaderValue("application/json"));
+});
+
+builder.Services.AddHttpClient("ExchangeRate", c =>
+{
+    c.BaseAddress = new Uri("https://api.exchangeratesapi.io/v1/");
+    c.DefaultRequestHeaders
+        .Accept
+        .Add(new MediaTypeWithQualityHeaderValue("application/json"));
+});
+
+builder.Services.AddScoped<ICryptoPriceService, CoinMarketCapCryptoPriceService>();
+builder.Services.AddScoped<IExchangeRatesService, ExchangeRatesService>();
+builder.Services.AddScoped<ICryptoQuoteService, CryptoQuoteService>();
+
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+app.UseCors(b => b.AllowAnyHeader()
+    .AllowAnyMethod()
+    .SetIsOriginAllowed(_ => true)
+    .AllowCredentials());
+
+app.UseHealthChecks("/health");
+app.UseFastEndpoints(config =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    config.Serializer.Options.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    config.Endpoints.RoutePrefix = "api";
+    config.Versioning.Prefix = "v";
+    config.Versioning.PrependToRoute = true;
+});
 
-app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+// if (app.Environment.IsDevelopment())
+// {
+app.UseOpenApi();
+app.UseSwaggerUi(s => s.ConfigureDefaults());
+// }
 
-app.MapGet("/weatherforecast", () =>
-    {
-        var forecast = Enumerable.Range(1, 5).Select(index =>
-                new WeatherForecast
-                (
-                    DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                    Random.Shared.Next(-20, 55),
-                    summaries[Random.Shared.Next(summaries.Length)]
-                ))
-            .ToArray();
-        return forecast;
-    })
-    .WithName("GetWeatherForecast")
-    .WithOpenApi();
-
-app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+await app.RunAsync();
